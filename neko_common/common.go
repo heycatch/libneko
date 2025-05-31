@@ -19,19 +19,18 @@ const (
 	RunMode_Other = iota
 	RunMode_NekoRay_Core
 	RunMode_NekoBox_Core
-	RunMode_NekoBoxForAndroid
 )
 
 // proxy (if specifiedInstance==nil, access without proxy)
 
-var GetCurrentInstance func() interface{}
+var GetCurrentInstance func() any
 
-var DialContext func(ctx context.Context, specifiedInstance interface{}, network, addr string) (net.Conn, error)
+var DialContext func(ctx context.Context, specifiedInstance any, network, addr string) (net.Conn, error)
 
 // DialUDP core bug?
-var DialUDP func(ctx context.Context, specifiedInstance interface{}) (net.PacketConn, error)
+var DialUDP func(ctx context.Context, specifiedInstance any) (net.PacketConn, error)
 
-var CreateProxyHttpClient func(specifiedInstance interface{}) *http.Client
+var CreateProxyHttpClient func(specifiedInstance any) *http.Client
 
 // no proxy
 

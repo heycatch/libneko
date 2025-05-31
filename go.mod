@@ -1,3 +1,3 @@
-module github.com/matsuridayo/libneko
+module github.com/heycatch/libneko
 
-go 1.19
+go 1.24.0

@@ -4,33 +4,34 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"time"
 )
 
-const UrlTestStandard_RTT = 0
-const UrlTestStandard_Handshake = 1
-const UrlTestStandard_FisrtHandshake = 2
-
-var errNoRedir = errors.New("no redir")
+const (
+	UrlTestStandard_RTT = iota
+	UrlTestStandard_Handshake
+	UrlTestStandard_FisrtHandshake
+)
 
 func UrlTest(client *http.Client, link string, timeout int32, standard int) (int32, error) {
 	if client == nil {
-		return 0, fmt.Errorf("no client")
+		return 0, errors.New("no client")
 	}
 	defer client.CloseIdleConnections()
 
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return errNoRedir
+		return errors.New("no redir")
 	}
 
-	var time_start time.Time
-	var hsk_end time.Time
-	var time_end time.Time
-	var times int
+	var (
+		time_start time.Time
+		time_end   time.Time
+		hsk_end    time.Time
+		times      int
+	)
 
 	switch standard {
 	case UrlTestStandard_FisrtHandshake:
@@ -70,7 +71,7 @@ func UrlTest(client *http.Client, link string, timeout int32, standard int) (int
 		time_start = time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
-			if errors.Is(err, errNoRedir) {
+			if errors.Is(err, errors.New("no redir")) {
 				err = nil
 			} else {
 				return 0, err

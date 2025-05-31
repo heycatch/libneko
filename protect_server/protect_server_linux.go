@@ -7,21 +7,35 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"sync"
 	"syscall"
 )
 
+type ProtectServer struct {
+	listener *net.UnixListener
+	done     chan struct{}
+	wg       sync.WaitGroup
+	verbose  bool
+}
+
+func (ps *ProtectServer) Close() error {
+	close(ps.done)
+	ps.listener.Close()
+	ps.wg.Wait()
+	return nil
+}
+
 func getOneFd(socket int) (int, error) {
-	// recvmsg
+	// Recvmsg.
 	buf := make([]byte, syscall.CmsgSpace(4))
 	_, _, _, _, err := syscall.Recvmsg(socket, nil, buf, 0)
 	if err != nil {
 		return 0, err
 	}
 
-	// parse control msgs
+	// Parse control msgs.
 	var msgs []syscall.SocketControlMessage
 	msgs, _ = syscall.ParseSocketControlMessage(buf)
-
 	if len(msgs) != 1 {
 		return 0, fmt.Errorf("invaild msgs count: %d", len(msgs))
 	}
@@ -31,18 +45,18 @@ func getOneFd(socket int) (int, error) {
 	if len(fds) != 1 {
 		return 0, fmt.Errorf("invaild fds count: %d", len(fds))
 	}
+
 	return fds[0], nil
 }
 
 // GetFdFromConn get net.Conn's file descriptor.
 func GetFdFromConn(l net.Conn) int {
-	v := reflect.ValueOf(l)
-	netFD := reflect.Indirect(reflect.Indirect(v).FieldByName("fd"))
+	netFD := reflect.Indirect(reflect.Indirect(reflect.ValueOf(l)).FieldByName("fd"))
 	pfd := reflect.Indirect(netFD.FieldByName("pfd"))
-	fd := int(pfd.FieldByName("Sysfd").Int())
-	return fd
+	return int(pfd.FieldByName("Sysfd").Int())
 }
 
+// Now don't forget about Close() when working with this function.
 func ServeProtect(path string, verbose bool, fwmark int, protectCtl func(fd int)) io.Closer {
 	if verbose {
 		log.Println("ServeProtect", path, fwmark)
@@ -55,47 +69,59 @@ func ServeProtect(path string, verbose bool, fwmark int, protectCtl func(fd int)
 	}
 	os.Chmod(path, 0777)
 
-	go func(ctl func(fd int)) {
+	server := &ProtectServer{
+		listener: l,
+		done:     make(chan struct{}),
+		verbose:  verbose,
+	}
+
+	server.wg.Add(1)
+	go func() {
+		defer server.wg.Done()
+
 		for {
-			c, err := l.Accept()
-			if err != nil {
-				if verbose {
-					log.Println("protect server accept:", err)
+			select {
+			case <-server.done:
+				if server.verbose {
+					log.Println("protect server: shutting down")
 				}
 				return
-			}
-
-			go func() {
-				socket := GetFdFromConn(c)
-				defer c.Close()
-
-				fd, err := getOneFd(socket)
+			default:
+				c, err := l.Accept()
 				if err != nil {
-					if verbose {
-						log.Println("protect server getOneFd:", err)
+					if server.verbose {
+						log.Println("protect server accept:", err)
 					}
 					return
 				}
-				defer syscall.Close(fd)
 
-				if ctl == nil {
-					// linux
-					if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, fwmark); err != nil {
-						log.Println("protect server syscall.SetsockoptInt:", err)
+				server.wg.Add(1)
+				go func(conn net.Conn) {
+					defer server.wg.Done()
+					defer conn.Close()
+
+					fd, err := getOneFd(GetFdFromConn(conn))
+					if err != nil {
+						if server.verbose {
+							log.Println("protect server getOneFd:", err)
+						}
+						return
 					}
-				} else {
-					// android
-					ctl(fd)
-				}
+					defer syscall.Close(fd)
 
-				if err == nil {
-					c.Write([]byte{1})
-				} else {
-					c.Write([]byte{0})
-				}
-			}()
+					success := false
+					if protectCtl == nil {
+						success = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_MARK, fwmark) == nil
+					}
+					if success {
+						c.Write([]byte{1})
+					} else {
+						c.Write([]byte{0})
+					}
+				}(c)
+			}
 		}
-	}(protectCtl)
+	}()
 
 	return l
 }
